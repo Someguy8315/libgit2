@@ -121,6 +121,8 @@ struct reuc_entry_internal {
 };
 
 bool git_index__enforce_unsaved_safety = false;
+bool git_index__disable_checksum_verification = false;
+bool git_index__disable_filepath_validation = false;
 
 /* local declarations */
 static int read_extension(size_t *read_len, git_index *index, size_t checksum_size, const char *buffer, size_t buffer_size);
@@ -663,9 +665,17 @@ static int compare_checksum(git_index *index)
 
 int git_index_read(git_index *index, int force)
 {
-	int error = 0, updated;
+	return git_index_read_ex(index, force, NULL);
+}
+
+int git_index_read_ex(git_index *index, int force, int *read)
+{
+	int error = 0, updated, checksum_updated;
 	git_str buffer = GIT_STR_INIT;
 	git_futils_filestamp stamp = index->stamp;
+
+	if (read)
+		*read = 0;
 
 	if (!index->index_file_path)
 		return create_index_error(-1,
@@ -674,28 +684,36 @@ int git_index_read(git_index *index, int force)
 	index->on_disk = git_fs_path_exists(index->index_file_path);
 
 	if (!index->on_disk) {
-		if (force && (error = git_index_clear(index)) < 0)
-			return error;
+		if (force) {
+			if ((error = git_index_clear(index)) < 0)
+				return error;
+			if (read)
+				*read = 1;
+		}
 
 		index->dirty = 0;
 		return 0;
 	}
 
-	if ((updated = git_futils_filestamp_check(&stamp, index->index_file_path) < 0) ||
-	    ((updated = compare_checksum(index)) < 0)) {
+	if ((updated = git_futils_filestamp_check(&stamp, index->index_file_path)) < 0 ||
+	    (checksum_updated = compare_checksum(index)) < 0) {
 		git_error_set(
 			GIT_ERROR_INDEX,
 			"failed to read index: '%s' no longer exists",
 			index->index_file_path);
-		return updated;
+		return -1;
 	}
 
-	if (!updated && !force)
+	/* index.skipHash writes a zero footer, so also compare the file stamp. */
+	if (!updated && !checksum_updated && !force)
 		return 0;
 
 	error = git_futils_readbuffer(&buffer, index->index_file_path);
 	if (error < 0)
 		return error;
+
+	if (read)
+		*read = 1;
 
 	index->tree = NULL;
 	git_pool_clear(&index->tree_pool);
@@ -954,7 +972,8 @@ static int index_entry_create(
 	if (st)
 		mode = st->st_mode;
 
-	if (!git_path_is_valid(repo, path, mode, path_valid_flags)) {
+	if (!git_index__disable_filepath_validation &&
+	    !git_path_is_valid(repo, path, mode, path_valid_flags)) {
 		git_error_set(GIT_ERROR_INDEX, "invalid path: '%s'", path);
 		return -1;
 	}
@@ -2757,8 +2776,9 @@ static int parse_index(git_index *index, const char *buffer, size_t buffer_size)
 	 * Precalculate the hash of the files's contents -- we'll match
 	 * it to the provided checksum in the footer.
 	 */
-	git_hash_buf(checksum, buffer, buffer_size - checksum_size,
-		git_oid_algorithm(index->oid_type));
+	if (!git_index__disable_checksum_verification)
+		git_hash_buf(checksum, buffer, buffer_size - checksum_size,
+			git_oid_algorithm(index->oid_type));
 
 	/* Parse header */
 	if ((error = read_header(&header, buffer)) < 0)
@@ -2830,14 +2850,15 @@ static int parse_index(git_index *index, const char *buffer, size_t buffer_size)
 	 * Note: checksum may be 0 if the index was written by a client
 	 * where index.skipHash was set to true.
 	 */
-	if (memcmp(zero_checksum, buffer, checksum_size) != 0 &&
+	if (!git_index__disable_checksum_verification &&
+	    memcmp(zero_checksum, buffer, checksum_size) != 0 &&
 	    memcmp(checksum, buffer, checksum_size) != 0) {
 		error = index_error_invalid(
 			"calculated checksum does not match expected");
 		goto done;
 	}
 
-	memcpy(index->checksum, checksum, checksum_size);
+	memcpy(index->checksum, buffer, checksum_size);
 
 #undef seek_forward
 
@@ -3813,28 +3834,29 @@ int git_index_update_all(
 
 int git_index_snapshot_new(git_vector *snap, git_index *index)
 {
-	int error;
-
 	GIT_REFCOUNT_INC(index);
 
 	git_atomic32_inc(&index->readers);
 	git_vector_sort(&index->entries);
 
-	error = git_vector_dup(snap, &index->entries, index->entries._cmp);
+	/* gitstatusd never mutates the index while readers are active. */
+	*snap = index->entries;
 
-	if (error < 0)
-		git_index_snapshot_release(snap, index);
-
-	return error;
+	return 0;
 }
 
 void git_index_snapshot_release(git_vector *snap, git_index *index)
 {
-	git_vector_dispose(snap);
+	GIT_UNUSED(snap);
 
 	git_atomic32_dec(&index->readers);
 
 	git_index_free(index);
+}
+
+const git_index_entry *git_index_get_byindex_no_sort(git_index *index, size_t n)
+{
+	return git_vector_get(&index->entries, n);
 }
 
 int git_index_snapshot_find(

@@ -1258,6 +1258,25 @@ int git_repository_discover(
 	return error;
 }
 
+int git_repository_discover_ex(
+        git_buf *gitdir,
+        git_buf *workdir,
+        const char *start_path,
+        uint32_t flags,
+        const char *ceiling_dirs)
+{
+	struct repo_paths paths = { GIT_STR_INIT };
+	int error;
+
+	GIT_ASSERT_ARG(start_path);
+	if ((error = find_repo(&paths, start_path, ceiling_dirs, flags)) == 0 &&
+	    (error = git_buf_fromstr(gitdir, &paths.gitdir)) == 0)
+		error = git_buf_fromstr(workdir, &paths.workdir);
+
+	repo_paths_dispose(&paths);
+	return error;
+}
+
 static int has_config_worktree(bool *out, git_config *cfg)
 {
 	int worktreeconfig = 0, error;

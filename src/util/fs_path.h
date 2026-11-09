@@ -512,6 +512,7 @@ struct git_fs_path_diriter
 {
 	git_str path;
 	size_t parent_len;
+	unsigned char d_type;
 
 	unsigned int flags;
 

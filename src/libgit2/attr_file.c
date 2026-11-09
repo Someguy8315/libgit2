@@ -281,9 +281,12 @@ int git_attr_file__out_of_date(
 	case GIT_ATTR_FILE_SOURCE_MEMORY:
 		return 0;
 
-	case GIT_ATTR_FILE_SOURCE_FILE:
+	case GIT_ATTR_FILE_SOURCE_FILE: {
+		/* Concurrent readers must not update the shared cached stamp. */
+		git_futils_filestamp stamp = file->cache_data.stamp;
 		return git_futils_filestamp_check(
-			&file->cache_data.stamp, file->entry->fullpath);
+			&stamp, file->entry->fullpath);
+	}
 
 	case GIT_ATTR_FILE_SOURCE_INDEX: {
 		int error;

@@ -17,6 +17,7 @@
 #include "win32/version.h"
 #include <aclapi.h>
 #else
+#include <fcntl.h>
 #include <dirent.h>
 #endif
 #include <stdio.h>
@@ -1461,6 +1462,7 @@ int git_fs_path_diriter_next(git_fs_path_diriter *diriter)
 	} while (skip_dot && git_fs_path_is_dot_or_dotdot(de->d_name));
 
 	filename = de->d_name;
+	diriter->d_type = de->d_type;
 	filename_len = strlen(filename);
 
 #ifdef GIT_USE_ICONV
@@ -1514,10 +1516,17 @@ int git_fs_path_diriter_fullpath(
 
 int git_fs_path_diriter_stat(struct stat *out, git_fs_path_diriter *diriter)
 {
+	const char *name;
 	GIT_ASSERT_ARG(out);
 	GIT_ASSERT_ARG(diriter);
 
-	return git_fs_path_lstat(diriter->path.ptr, out);
+	/* Use the open directory to avoid resolving the full prefix for every file. */
+	name = diriter->path.ptr + diriter->parent_len;
+	if (*name == '/')
+		name++;
+	if (fstatat(dirfd(diriter->dir), name, out, AT_SYMLINK_NOFOLLOW) < 0)
+		return git_fs_path_set_error(errno, diriter->path.ptr, "stat");
+	return 0;
 }
 
 void git_fs_path_diriter_free(git_fs_path_diriter *diriter)

@@ -18,6 +18,7 @@
 #include "posix.h"
 
 #define DEFAULT_NESTING_LEVEL	5
+bool git_refdb__disable_reading_packed_tags = false;
 #define MAX_NESTING_LEVEL		10
 
 int git_refdb_new(git_refdb **out, git_repository *repo)

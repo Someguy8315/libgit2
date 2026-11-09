@@ -33,6 +33,7 @@ typedef struct {
 
 	uint32_t diffcaps;
 	bool index_updated;
+	uint32_t seen_delta_types;
 } git_diff_generated;
 
 static git_diff_delta *diff_delta__alloc(
@@ -75,9 +76,23 @@ static int diff_insert_delta(
 	int error = 0;
 
 	if (diff->base.opts.notify_cb) {
+		if (DIFF_FLAG_IS_SET(diff, GIT_DIFF_EXEMPLARS) &&
+		    (diff->seen_delta_types & (1u << delta->status))) {
+			git__free(delta);
+			return 0;
+		}
 		error = diff->base.opts.notify_cb(
 			&diff->base, delta, matched_pathspec, diff->base.opts.payload);
 
+		if (error > 0 && DIFF_FLAG_IS_SET(diff, GIT_DIFF_EXEMPLARS)) {
+			if (error & GIT_DIFF_DELTA_SKIP_TYPE) {
+				diff->seen_delta_types |= 1u << delta->status;
+				if (delta->status == GIT_DELTA_UNTRACKED)
+					diff->base.opts.flags &=
+						~(GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS);
+			}
+			error &= GIT_DIFF_DELTA_DO_NOT_INSERT;
+		}
 		if (error) {
 			git__free(delta);
 
@@ -164,6 +179,10 @@ static int diff_delta__from_one(
 	if (DIFF_FLAG_IS_SET(diff, GIT_DIFF_REVERSE))
 		has_old = !has_old;
 
+	if (DIFF_FLAG_IS_SET(diff, GIT_DIFF_EXEMPLARS) &&
+	    (diff->seen_delta_types & (1u << status)))
+		return 0;
+
 	if ((entry->flags & GIT_INDEX_ENTRY_VALID) != 0)
 		return 0;
 
@@ -215,6 +234,13 @@ static int diff_delta__from_one(
 
 	diff_delta__flag_known_sizes(delta);
 
+	if (status == GIT_DELTA_TYPECHANGE) {
+		if (has_old)
+			delta->new_file.mode = GIT_FILEMODE_TREE;
+		else
+			delta->old_file.mode = GIT_FILEMODE_TREE;
+	}
+
 	return diff_insert_delta(diff, delta, matched_pathspec);
 }
 
@@ -234,6 +260,10 @@ static int diff_delta__from_two(
 	git_oid_t oid_type;
 
 	oid_type = diff->base.opts.oid_type;
+
+	if (DIFF_FLAG_IS_SET(diff, GIT_DIFF_EXEMPLARS) &&
+	    (diff->seen_delta_types & (1u << status)))
+		return 0;
 
 	if (status == GIT_DELTA_UNMODIFIED &&
 		DIFF_FLAG_ISNT_SET(diff, GIT_DIFF_INCLUDE_UNMODIFIED))
@@ -283,43 +313,6 @@ static int diff_delta__from_two(
 	diff_delta__flag_known_sizes(delta);
 
 	return diff_insert_delta(diff, delta, matched_pathspec);
-}
-
-static git_diff_delta *diff_delta__last_for_item(
-	git_diff_generated *diff,
-	const git_index_entry *item)
-{
-	git_diff_delta *delta = git_vector_last(&diff->base.deltas);
-	if (!delta)
-		return NULL;
-
-	switch (delta->status) {
-	case GIT_DELTA_UNMODIFIED:
-	case GIT_DELTA_DELETED:
-		if (git_oid__cmp(&delta->old_file.id, &item->id) == 0)
-			return delta;
-		break;
-	case GIT_DELTA_ADDED:
-		if (git_oid__cmp(&delta->new_file.id, &item->id) == 0)
-			return delta;
-		break;
-	case GIT_DELTA_UNREADABLE:
-	case GIT_DELTA_UNTRACKED:
-		if (diff->base.strcomp(delta->new_file.path, item->path) == 0 &&
-			git_oid__cmp(&delta->new_file.id, &item->id) == 0)
-			return delta;
-		break;
-	case GIT_DELTA_MODIFIED:
-		if (git_oid__cmp(&delta->old_file.id, &item->id) == 0 ||
-		    (delta->new_file.mode == item->mode &&
-			git_oid__cmp(&delta->new_file.id, &item->id) == 0))
-			return delta;
-		break;
-	default:
-		break;
-	}
-
-	return NULL;
 }
 
 static char *diff_strdup_prefix(git_pool *pool, const char *prefix)
@@ -868,6 +861,9 @@ static int maybe_modified(
 			 !git_oid_is_zero(&oitem->id)) {
 		status = GIT_DELTA_UNMODIFIED;
 
+	} else if ((oitem->flags_extended & GIT_INDEX_ENTRY_INTENT_TO_ADD) && new_is_workdir) {
+		status = GIT_DELTA_ADDED;
+
 	/* if we have an unknown OID and a workdir iterator, then check some
 	 * circumstances that can accelerate things or need special handling
 	 */
@@ -888,8 +884,7 @@ static int maybe_modified(
 		 */
 		else if (omode != nmode || oitem->file_size != nitem->file_size) {
 			status = GIT_DELTA_MODIFIED;
-			modified_uncertain =
-				(oitem->file_size <= 0 && nitem->file_size > 0);
+			/* Read-only gitstatusd does not need refreshed index stat data. */
 		}
 		else if (!git_index_time_eq(&oitem->mtime, &nitem->mtime) ||
 			(use_ctime && !git_index_time_eq(&oitem->ctime, &nitem->ctime)) ||
@@ -1058,18 +1053,27 @@ static int handle_unmatched_new_item(
 		delta_type = GIT_DELTA_CONFLICTED;
 
 	/* update delta_type if this item is ignored */
-	else if (git_iterator_current_is_ignored(info->new_iter))
+	else if (!(nitem->mode == GIT_FILEMODE_TREE && contains_oitem) &&
+	         git_iterator_current_is_ignored(info->new_iter))
 		delta_type = GIT_DELTA_IGNORED;
 
 	if (nitem->mode == GIT_FILEMODE_TREE) {
 		bool recurse_into_dir = contains_oitem;
+		const char *matched_pathspec;
+
+		if (!contains_oitem && delta_type == GIT_DELTA_UNTRACKED &&
+		    DIFF_FLAG_ISNT_SET(diff, GIT_DIFF_INCLUDE_UNTRACKED))
+			return iterator_advance(&info->nitem, info->new_iter);
 
 		/* check if user requests recursion into this type of dir */
 		recurse_into_dir = contains_oitem ||
 			(delta_type == GIT_DELTA_UNTRACKED &&
 			 DIFF_FLAG_IS_SET(diff, GIT_DIFF_RECURSE_UNTRACKED_DIRS)) ||
 			(delta_type == GIT_DELTA_IGNORED &&
-			 DIFF_FLAG_IS_SET(diff, GIT_DIFF_RECURSE_IGNORED_DIRS));
+			 DIFF_FLAG_IS_SET(diff, GIT_DIFF_RECURSE_IGNORED_DIRS)) ||
+			(delta_type == GIT_DELTA_UNTRACKED &&
+			 info->new_iter->type == GIT_ITERATOR_WORKDIR &&
+			 !diff_pathspec_match(&matched_pathspec, diff, nitem));
 
 		/* do not advance into directories that contain a .git file */
 		if (recurse_into_dir && !contains_oitem) {
@@ -1089,42 +1093,29 @@ static int handle_unmatched_new_item(
 			delta_type == GIT_DELTA_UNTRACKED &&
 			DIFF_FLAG_ISNT_SET(diff, GIT_DIFF_ENABLE_FAST_UNTRACKED_DIRS))
 		{
-			git_diff_delta *last;
 			git_iterator_status_t untracked_state;
-
-			/* attempt to insert record for this directory */
-			if ((error = diff_delta__from_one(diff, delta_type, NULL, nitem)) != 0)
-				return error;
-
-			/* if delta wasn't created (because of rules), just skip ahead */
-			last = diff_delta__last_for_item(diff, nitem);
-			if (!last)
-				return iterator_advance(&info->nitem, info->new_iter);
+			git_index_entry entry = *nitem;
 
 			/* iterate into dir looking for an actual untracked file */
 			if ((error = iterator_advance_over(
 					&info->nitem, &untracked_state, info->new_iter)) < 0)
 				return error;
 
-			/* if we found nothing that matched our pathlist filter, exclude */
-			if (untracked_state == GIT_ITERATOR_STATUS_FILTERED) {
-				git_vector_pop(&diff->base.deltas);
-				git__free(last);
-			}
+			/* Notify only after verifying that the directory is untracked. */
+			if (untracked_state == GIT_ITERATOR_STATUS_FILTERED)
+				return 0;
 
 			/* if we found nothing or just ignored items, update the record */
 			if (untracked_state == GIT_ITERATOR_STATUS_IGNORED ||
 				untracked_state == GIT_ITERATOR_STATUS_EMPTY) {
-				last->status = GIT_DELTA_IGNORED;
+				delta_type = GIT_DELTA_IGNORED;
 
 				/* remove the record if we don't want ignored records */
-				if (DIFF_FLAG_ISNT_SET(diff, GIT_DIFF_INCLUDE_IGNORED)) {
-					git_vector_pop(&diff->base.deltas);
-					git__free(last);
+				if (DIFF_FLAG_ISNT_SET(diff, GIT_DIFF_INCLUDE_IGNORED))
+					return 0;
 				}
-			}
 
-			return 0;
+			return diff_delta__from_one(diff, delta_type, NULL, &entry);
 		}
 
 		/* try to advance into directory if necessary */
@@ -1177,10 +1168,6 @@ static int handle_unmatched_new_item(
 			delta_type = GIT_DELTA_UNREADABLE;
 	}
 
-	/* Actually create the record for this item if necessary */
-	if ((error = diff_delta__from_one(diff, delta_type, NULL, nitem)) != 0)
-		return error;
-
 	/* If user requested TYPECHANGE records, then check for that instead of
 	 * just generating an ADDED/UNTRACKED record
 	 */
@@ -1189,12 +1176,12 @@ static int handle_unmatched_new_item(
 		contains_oitem)
 	{
 		/* this entry was prefixed with a tree - make TYPECHANGE */
-		git_diff_delta *last = diff_delta__last_for_item(diff, nitem);
-		if (last) {
-			last->status = GIT_DELTA_TYPECHANGE;
-			last->old_file.mode = GIT_FILEMODE_TREE;
-		}
+		delta_type = GIT_DELTA_TYPECHANGE;
 	}
+
+	/* Actually create the record for this item if necessary */
+	if ((error = diff_delta__from_one(diff, delta_type, NULL, nitem)) != 0)
+		return error;
 
 	return iterator_advance(&info->nitem, info->new_iter);
 }
@@ -1209,30 +1196,25 @@ static int handle_unmatched_old_item(
 	if (git_index_entry_is_conflict(info->oitem))
 		delta_type = GIT_DELTA_CONFLICTED;
 
-	if ((error = diff_delta__from_one(diff, delta_type, info->oitem, NULL)) < 0)
-		return error;
-
 	/* if we are generating TYPECHANGE records then check for that
 	 * instead of just generating a DELETE record
 	 */
-	if (DIFF_FLAG_IS_SET(diff, GIT_DIFF_INCLUDE_TYPECHANGE_TREES) &&
+	else if (DIFF_FLAG_IS_SET(diff, GIT_DIFF_INCLUDE_TYPECHANGE_TREES) &&
 		entry_is_prefixed(diff, info->nitem, info->oitem))
 	{
 		/* this entry has become a tree! convert to TYPECHANGE */
-		git_diff_delta *last = diff_delta__last_for_item(diff, info->oitem);
-		if (last) {
-			last->status = GIT_DELTA_TYPECHANGE;
-			last->new_file.mode = GIT_FILEMODE_TREE;
-		}
+		delta_type = GIT_DELTA_TYPECHANGE;
 
 		/* If new_iter is a workdir iterator, then this situation
 		 * will certainly be followed by a series of untracked items.
 		 * Unless RECURSE_UNTRACKED_DIRS is set, skip over them...
 		 */
-		if (S_ISDIR(info->nitem->mode) &&
-			DIFF_FLAG_ISNT_SET(diff, GIT_DIFF_RECURSE_UNTRACKED_DIRS))
-			return iterator_advance(&info->nitem, info->new_iter);
+		if ((error = iterator_advance(&info->nitem, info->new_iter)) < 0)
+			return error;
 	}
+
+	if ((error = diff_delta__from_one(diff, delta_type, info->oitem, NULL)) < 0)
+		return error;
 
 	return iterator_advance(&info->oitem, info->old_iter);
 }
@@ -1289,6 +1271,12 @@ int git_diff__from_iterators(
 	/* run iterators building diffs */
 	while (!error && (info.oitem || info.nitem)) {
 		int cmp;
+
+		if (new_iter->type == GIT_ITERATOR_INDEX && info.nitem &&
+		    (info.nitem->flags_extended & GIT_INDEX_ENTRY_INTENT_TO_ADD)) {
+			error = iterator_advance(&info.nitem, info.new_iter);
+			continue;
+		}
 
 		/* report progress */
 		if (opts && opts->progress_cb) {
@@ -1355,6 +1343,13 @@ static int diff_prepare_iterator_opts(char **prefix, git_iterator_options *a, in
 	b->flags = bflags;
 	a->start = b->start = *prefix;
 	a->end = b->end = *prefix;
+
+	if (opts && opts->range_start && *opts->range_start &&
+	    (!*prefix || !**prefix || strcmp(opts->range_start, *prefix) > 0))
+		a->start = b->start = opts->range_start;
+	if (opts && opts->range_end && *opts->range_end &&
+	    (!*prefix || !**prefix || strcmp(opts->range_end, *prefix) < 0))
+		a->end = b->end = opts->range_end;
 
 	return 0;
 }
@@ -1747,4 +1742,3 @@ on_error:
 
 	return error;
 }
-

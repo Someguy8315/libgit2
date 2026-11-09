@@ -10,6 +10,7 @@
 #include "common.h"
 
 #include "git2/refdb.h"
+extern bool git_refdb__disable_reading_packed_tags;
 #include "repository.h"
 
 struct git_refdb {

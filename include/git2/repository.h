@@ -102,6 +102,15 @@ GIT_EXTERN(int) git_repository_discover(
 		git_buf *out,
 		const char *start_path,
 		int across_fs,
+        const char *ceiling_dirs);
+
+/* gitstatusd: discover both paths without allocating a repository. */
+GIT_EXTERN(int)
+git_repository_discover_ex(
+        git_buf *gitdir,
+        git_buf *workdir,
+        const char *start_path,
+        uint32_t flags,
 		const char *ceiling_dirs);
 
 /**

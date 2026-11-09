@@ -372,6 +372,13 @@ GIT_EXTERN(int) git_index_set_version(git_index *index, unsigned int version);
  */
 GIT_EXTERN(int) git_index_read(git_index *index, int force);
 
+/* gitstatusd: report whether a read invalidated cached entry pointers. */
+GIT_EXTERN(int) git_index_read_ex(git_index *index, int force, int *read);
+
+/* gitstatusd: the index must already be sorted and remain immutable. */
+GIT_EXTERN(const git_index_entry *)
+git_index_get_byindex_no_sort(git_index *index, size_t n);
+
 /**
  * Write an existing index object from memory back to disk
  * using an atomic file lock.

@@ -170,7 +170,10 @@ typedef enum {
 	/** Include the necessary deflate / delta information so that `git-apply`
 	 *  can apply given diff information to binary files.
 	 */
-	GIT_DIFF_SHOW_BINARY = (1u << 30)
+	GIT_DIFF_SHOW_BINARY = (1u << 30),
+
+	/* gitstatusd: callback can stop reporting a particular delta type. */
+	GIT_DIFF_EXEMPLARS = (1u << 31)
 } git_diff_option_t;
 
 /**
@@ -349,6 +352,12 @@ typedef struct {
  * @param payload the user-specified callback payload
  * @return 0 on success, 1 to skip this delta, or an error code
  */
+/* With GIT_DIFF_EXEMPLARS, positive notify results are a bitmask. */
+enum {
+	GIT_DIFF_DELTA_DO_NOT_INSERT = 1,
+	GIT_DIFF_DELTA_SKIP_TYPE = 2
+};
+
 typedef int GIT_CALLBACK(git_diff_notify_cb)(
 	const git_diff *diff_so_far,
 	const git_diff_delta *delta_to_add,
@@ -468,10 +477,14 @@ typedef struct {
 	 * Defaults to "b".
 	 */
 	const char *new_prefix;
+
+	/* gitstatusd: inclusive lexicographic bounds; NULL/empty means unbounded. */
+	const char *range_start;
+	const char *range_end;
 } git_diff_options;
 
 /** The current version of the diff options structure */
-#define GIT_DIFF_OPTIONS_VERSION 1
+#define GIT_DIFF_OPTIONS_VERSION 2
 
 /** Stack initializer for diff options.  Alternatively use
  * `git_diff_options_init` programmatic initialization.

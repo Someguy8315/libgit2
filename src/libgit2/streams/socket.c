@@ -182,10 +182,11 @@ static int socket_connect(git_stream *stream)
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_family = AF_UNSPEC;
 
-	if ((error = p_getaddrinfo(st->host, st->port, &hints, &info)) != 0) {
+	/* gitstatusd never connects to remotes; avoid glibc NSS dependencies. */
+	error = GIT_ENOTFOUND;
+	if (error != 0) {
 		git_error_set(GIT_ERROR_NET,
-			   "failed to resolve address for %s: %s",
-			   st->host, p_gai_strerror(error));
+			   "network access is disabled in gitstatusd: %s", st->host);
 		return -1;
 	}
 

@@ -489,6 +489,62 @@ cleanup:
 	return error;
 }
 
+int git_branch_push_remote(
+	git_remote **remote_out, git_buf *name_out,
+	git_repository *repo, const char *refname)
+{
+	git_str remote_name = GIT_STR_INIT, name = GIT_STR_INIT;
+	git_remote *remote = NULL;
+	git_config *config;
+	const git_refspec *refspec;
+	int error;
+
+	GIT_ASSERT_ARG(remote_out);
+	GIT_ASSERT_ARG(name_out);
+	GIT_ASSERT_ARG(repo);
+	GIT_ASSERT_ARG(refname);
+	*remote_out = NULL;
+	if (!git_reference__is_branch(refname))
+		return not_a_local_branch(refname);
+	if ((error = git_repository_config_snapshot(&config, repo)) < 0)
+		return error;
+
+	error = retrieve_upstream_configuration(
+		&remote_name, config, refname, "branch.%s.pushremote");
+	if (error == GIT_ENOTFOUND)
+		error = git_config__get_string_buf(&remote_name, config, "remote.pushdefault");
+	if (error < 0)
+		goto cleanup;
+	if (!remote_name.size) {
+		error = GIT_ENOTFOUND;
+		goto cleanup;
+	}
+
+	if (strcmp(remote_name.ptr, ".") != 0) {
+		if ((error = git_remote_lookup(&remote, repo, remote_name.ptr)) < 0)
+			goto cleanup;
+		refspec = git_remote__matching_refspec(remote, refname);
+		if (!refspec) {
+			error = GIT_ENOTFOUND;
+			goto cleanup;
+		}
+		error = git_refspec__transform(&name, refspec, refname);
+	} else {
+		error = git_str_sets(&name, refname);
+	}
+	if (error < 0 || (error = git_buf_fromstr(name_out, &name)) < 0)
+		goto cleanup;
+	*remote_out = remote;
+	remote = NULL;
+
+cleanup:
+	git_config_free(config);
+	git_remote_free(remote);
+	git_str_dispose(&remote_name);
+	git_str_dispose(&name);
+	return error;
+}
+
 static int git_branch_upstream_with_format(
 	git_str *out,
 	git_repository *repo,

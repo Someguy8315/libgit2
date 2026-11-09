@@ -172,7 +172,7 @@ struct git_repository {
 
 GIT_INLINE(git_attr_cache *) git_repository_attr_cache(git_repository *repo)
 {
-	return repo->attrcache;
+	return git_atomic_load(repo->attrcache);
 }
 
 int git_repository_head_commit(git_commit **commit, git_repository *repo);

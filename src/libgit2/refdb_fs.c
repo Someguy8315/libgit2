@@ -113,6 +113,7 @@ static int packref_cmp(const void *a_, const void *b_)
 static int packed_reload(refdb_fs_backend *backend)
 {
 	int error;
+	bool sorted = false;
 	git_str packedrefs = GIT_STR_INIT;
 	size_t oid_hexsize = git_oid_hexsize(backend->oid_type);
 	char *scan, *eof, *eol;
@@ -144,6 +145,13 @@ static int packed_reload(refdb_fs_backend *backend)
 	scan = packedrefs.ptr;
 	eof  = scan + packedrefs.size;
 
+	/* Only stop early when the file explicitly promises sorted references. */
+	if (git__prefixcmp(scan, "# pack-refs with:") == 0 &&
+	    (eol = strchr(scan, '\n')) != NULL) {
+		const char *trait = strstr(scan, " sorted");
+		sorted = trait && trait < eol &&
+			(trait[7] == ' ' || trait[7] == '\r' || trait[7] == '\n');
+	}
 	scan = packed_set_peeling_mode(scan, packedrefs.size, backend);
 	if (!scan)
 		goto parse_failed;
@@ -171,6 +179,11 @@ static int packed_reload(refdb_fs_backend *backend)
 		*eol = '\0';
 		if (eol[-1] == '\r')
 			eol[-1] = '\0';
+
+		/* TagDB reads packed tags itself; libgit2 only needs earlier refs. */
+		if (sorted && git_refdb__disable_reading_packed_tags &&
+		    strcmp(scan, "refs/tags/") > 0)
+			break;
 
 		if (git_sortedcache_upsert((void **)&ref, backend->refcache, scan) < 0)
 			goto parse_failed;

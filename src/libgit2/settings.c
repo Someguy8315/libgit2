@@ -23,6 +23,7 @@
 #include "odb.h"
 #include "rand.h"
 #include "refs.h"
+#include "refdb.h"
 #include "runtime.h"
 #include "sysdir.h"
 #include "thread.h"
@@ -349,6 +350,18 @@ int git_libgit2_opts(int key, ...)
 
 	case GIT_OPT_ENABLE_UNSAVED_INDEX_SAFETY:
 		git_index__enforce_unsaved_safety = (va_arg(ap, int) != 0);
+		break;
+
+	case GIT_OPT_DISABLE_INDEX_CHECKSUM_VERIFICATION:
+		git_index__disable_checksum_verification = (va_arg(ap, int) != 0);
+		break;
+
+	case GIT_OPT_DISABLE_INDEX_FILEPATH_VALIDATION:
+		git_index__disable_filepath_validation = (va_arg(ap, int) != 0);
+		break;
+
+	case GIT_OPT_DISABLE_READNG_PACKED_TAGS:
+		git_refdb__disable_reading_packed_tags = (va_arg(ap, int) != 0);
 		break;
 
 	case GIT_OPT_SET_PACK_MAX_OBJECTS:

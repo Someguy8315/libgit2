@@ -21,6 +21,8 @@
 #define GIT_INDEX_FILE_MODE 0666
 
 extern bool git_index__enforce_unsaved_safety;
+extern bool git_index__disable_checksum_verification;
+extern bool git_index__disable_filepath_validation;
 
 struct git_index {
 	git_refcount rc;
@@ -86,7 +88,11 @@ GIT_INLINE(bool) git_index_time_eq(const git_index_time *one, const git_index_ti
 		return false;
 
 #ifdef GIT_USE_NSEC
-	if (one->nanoseconds != two->nanoseconds)
+	if (one->nanoseconds != two->nanoseconds
+#ifdef GIT_ZERO_NSEC
+	    && one->nanoseconds != 0
+#endif
+	   )
 		return false;
 #endif
 
