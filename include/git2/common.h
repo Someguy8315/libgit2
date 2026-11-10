@@ -264,8 +264,11 @@ typedef enum {
 	GIT_OPT_DISABLE_INDEX_CHECKSUM_VERIFICATION,
 	GIT_OPT_DISABLE_INDEX_FILEPATH_VALIDATION,
 	GIT_OPT_DISABLE_READNG_PACKED_TAGS,
-	/* Check config files for changes at most once per non-zero epoch value. */
-	GIT_OPT_SET_CONFIG_REFRESH_EPOCH
+	/*
+	 * gitstatusd: within one non-zero epoch value, treat config files and
+	 * the HEAD tree used for submodule status as unchanged.
+	 */
+	GIT_OPT_SET_REFRESH_EPOCH
 } git_libgit2_opt_t;
 
 /**

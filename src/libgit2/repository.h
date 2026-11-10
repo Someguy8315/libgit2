@@ -176,7 +176,20 @@ struct git_repository {
 	/* .gitmodules, kept open to be checked for changes like other config files */
 	git_mutex gitmodules_lock;
 	git_config *gitmodules;
+
+	/* The HEAD tree read for submodule status in refresh epoch head_tree_epoch */
+	git_mutex head_tree_lock;
+	git_tree *head_tree;
+	int head_tree_error;
+	int head_tree_epoch;
 };
+
+/*
+ * gitstatusd: when non-zero, config files and the HEAD tree used for
+ * submodule status are read at most once per value; see
+ * GIT_OPT_SET_REFRESH_EPOCH.
+ */
+extern git_atomic32 git_repository__refresh_epoch;
 
 GIT_INLINE(git_attr_cache *) git_repository_attr_cache(git_repository *repo)
 {

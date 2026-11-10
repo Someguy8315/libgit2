@@ -12,7 +12,6 @@
 #include "buf.h"
 #include "cache.h"
 #include "common.h"
-#include "config_backend.h"
 #include "filter.h"
 #include "grafts.h"
 #include "hash.h"
@@ -365,8 +364,8 @@ int git_libgit2_opts(int key, ...)
 		git_refdb__disable_reading_packed_tags = (va_arg(ap, int) != 0);
 		break;
 
-	case GIT_OPT_SET_CONFIG_REFRESH_EPOCH:
-		git_atomic32_set(&git_config_file__refresh_epoch, va_arg(ap, int));
+	case GIT_OPT_SET_REFRESH_EPOCH:
+		git_atomic32_set(&git_repository__refresh_epoch, va_arg(ap, int));
 		break;
 
 	case GIT_OPT_SET_PACK_MAX_OBJECTS:

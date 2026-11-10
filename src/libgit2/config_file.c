@@ -226,13 +226,11 @@ out:
 	return error;
 }
 
-git_atomic32 git_config_file__refresh_epoch;
-
 static int config_file_refresh(git_config_backend *cfg)
 {
 	config_file_backend *b = GIT_CONTAINER_OF(cfg, config_file_backend, parent);
 	git_config_list *config_list = NULL;
-	int error, modified, epoch = git_atomic32_get(&git_config_file__refresh_epoch);
+	int error, modified, epoch = git_atomic32_get(&git_repository__refresh_epoch);
 
 	if (cfg->readonly)
 		return 0;

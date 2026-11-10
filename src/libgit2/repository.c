@@ -145,6 +145,8 @@ static void set_index(git_repository *repo, git_index *index)
 	}
 }
 
+git_atomic32 git_repository__refresh_epoch;
+
 int git_repository__cleanup(git_repository *repo)
 {
 	GIT_ASSERT_ARG(repo);
@@ -153,6 +155,8 @@ int git_repository__cleanup(git_repository *repo)
 	git_submodule__wd_repos_free(repo);
 	git_config_free(repo->gitmodules);
 	repo->gitmodules = NULL;
+	git_tree_free(repo->head_tree);
+	repo->head_tree = NULL;
 	git_cache_clear(&repo->objects);
 	git_attr_cache_flush(repo);
 	git_grafts_free(repo->grafts);
@@ -196,6 +200,7 @@ void git_repository_free(git_repository *repo)
 
 	git_mutex_free(&repo->submodule_wd_repos_lock);
 	git_mutex_free(&repo->gitmodules_lock);
+	git_mutex_free(&repo->head_tree_lock);
 	git__memzero(repo, sizeof(*repo));
 	git__free(repo);
 }
@@ -315,7 +320,8 @@ static git_repository *repository_alloc(void)
 	if (repo == NULL ||
 		git_cache_init(&repo->objects) < 0 ||
 		git_mutex_init(&repo->submodule_wd_repos_lock) < 0 ||
-		git_mutex_init(&repo->gitmodules_lock) < 0)
+		git_mutex_init(&repo->gitmodules_lock) < 0 ||
+		git_mutex_init(&repo->head_tree_lock) < 0)
 		goto on_error;
 
 	git_array_init_to_size(repo->reserved_names, 4);

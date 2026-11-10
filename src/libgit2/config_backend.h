@@ -37,11 +37,6 @@ extern int git_config_backend_from_file(git_config_backend **out, const char *pa
  */
 extern int git_config_backend_snapshot(git_config_backend **out, git_config_backend *source);
 
-/*
- * gitstatusd: when non-zero, config files are checked for changes at most
- * once per value; see GIT_OPT_SET_CONFIG_REFRESH_EPOCH.
- */
-extern git_atomic32 git_config_file__refresh_epoch;
 
 GIT_INLINE(int) git_config_backend_open(git_config_backend *cfg, unsigned int level, const git_repository *repo)
 {

@@ -1880,6 +1880,34 @@ static void submodule_update_from_head_data(
 	}
 }
 
+/*
+ * gitstatusd: within a refresh epoch, read the HEAD tree only once instead of
+ * reading HEAD and its branch again for every submodule.
+ */
+static int submodule_head_tree(git_tree **out, git_repository *repo)
+{
+	int epoch = git_atomic32_get(&git_repository__refresh_epoch), error;
+
+	if (!epoch)
+		return git_repository_head_tree(out, repo);
+
+	if (git_mutex_lock(&repo->head_tree_lock) < 0)
+		return -1;
+
+	if (repo->head_tree_epoch != epoch) {
+		git_tree_free(repo->head_tree);
+		repo->head_tree = NULL;
+		repo->head_tree_error = git_repository_head_tree(&repo->head_tree, repo);
+		repo->head_tree_epoch = epoch;
+	}
+
+	if ((error = repo->head_tree_error) == 0)
+		error = git_object_dup((git_object **)out, (git_object *)repo->head_tree);
+
+	git_mutex_unlock(&repo->head_tree_lock);
+	return error;
+}
+
 static int submodule_update_head(git_submodule *submodule)
 {
 	git_tree *head = NULL;
@@ -1890,7 +1918,7 @@ static int submodule_update_head(git_submodule *submodule)
 		  GIT_SUBMODULE_STATUS__HEAD_OID_VALID);
 
 	/* if we can't look up file in current head, then done */
-	if (git_repository_head_tree(&head, submodule->repo) < 0 ||
+	if (submodule_head_tree(&head, submodule->repo) < 0 ||
 		git_tree_entry_bypath(&te, head, submodule->path) < 0)
 		git_error_clear();
 	else
