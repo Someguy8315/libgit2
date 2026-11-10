@@ -172,6 +172,10 @@ struct git_repository {
 	/* Open submodule repositories by path, reused to read their HEAD; see submodule.c. */
 	git_mutex submodule_wd_repos_lock;
 	git_submodule_wd_repos submodule_wd_repos;
+
+	/* .gitmodules, kept open to be checked for changes like other config files */
+	git_mutex gitmodules_lock;
+	git_config *gitmodules;
 };
 
 GIT_INLINE(git_attr_cache *) git_repository_attr_cache(git_repository *repo)

@@ -2375,30 +2375,29 @@ static int submodule_load_from_wd_lite(git_submodule *sm)
  */
 static int gitmodules_snapshot(git_config **snap, git_repository *repo)
 {
-	git_config *mods = NULL;
 	git_str path = GIT_STR_INIT;
-	int error;
+	int error = 0;
 
 	if (git_repository_workdir(repo) == NULL)
 		return GIT_ENOTFOUND;
 
-	if ((error = git_repository_workdir_path(&path, repo, GIT_MODULES_FILE)) < 0)
-		return error;
+	/*
+	 * gitstatusd: keep .gitmodules open on the repository. Its backend checks
+	 * the file for changes like any config file, so looking up each submodule
+	 * no longer opens and parses the whole file again.
+	 */
+	if (git_mutex_lock(&repo->gitmodules_lock) < 0)
+		return -1;
 
-	if ((error = git_config_open_ondisk(&mods, path.ptr)) < 0)
-		goto cleanup;
+	if (!repo->gitmodules &&
+	    (error = git_repository_workdir_path(&path, repo, GIT_MODULES_FILE)) == 0)
+		error = git_config_open_ondisk(&repo->gitmodules, path.ptr);
+
+	if (!error)
+		error = git_config_snapshot(snap, repo->gitmodules);
+
+	git_mutex_unlock(&repo->gitmodules_lock);
 	git_str_dispose(&path);
-
-	if ((error = git_config_snapshot(snap, mods)) < 0)
-		goto cleanup;
-
-	error = 0;
-
-cleanup:
-	if (mods)
-		git_config_free(mods);
-	git_str_dispose(&path);
-
 	return error;
 }
 
