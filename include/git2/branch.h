@@ -199,6 +199,14 @@ GIT_EXTERN(int) git_branch_name(
 		const char **out,
 		const git_reference *ref);
 
+/* gitstatusd: resolve branch.<name>.remote / branch.<name>.merge. */
+GIT_EXTERN(int)
+git_branch_remote(
+        git_remote **remote_out,
+        git_buf *name_out,
+        git_repository *repo,
+        const char *refname);
+
 /* gitstatusd: resolve branch.<name>.pushRemote / remote.pushDefault. */
 GIT_EXTERN(int)
 git_branch_push_remote(

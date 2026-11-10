@@ -489,14 +489,19 @@ cleanup:
 	return error;
 }
 
-int git_branch_push_remote(
+/*
+ * gitstatusd: resolve the upstream (push = false) or push remote of a branch
+ * and the remote-tracking reference it maps to, with one config snapshot.
+ */
+static int branch_remote(
 	git_remote **remote_out, git_buf *name_out,
-	git_repository *repo, const char *refname)
+	git_repository *repo, const char *refname, bool push)
 {
-	git_str remote_name = GIT_STR_INIT, name = GIT_STR_INIT;
+	git_str remote_name = GIT_STR_INIT, merge_name = GIT_STR_INIT, name = GIT_STR_INIT;
 	git_remote *remote = NULL;
 	git_config *config;
 	const git_refspec *refspec;
+	const char *source;
 	int error;
 
 	GIT_ASSERT_ARG(remote_out);
@@ -509,13 +514,22 @@ int git_branch_push_remote(
 	if ((error = git_repository_config_snapshot(&config, repo)) < 0)
 		return error;
 
-	error = retrieve_upstream_configuration(
-		&remote_name, config, refname, "branch.%s.pushremote");
-	if (error == GIT_ENOTFOUND)
-		error = git_config__get_string_buf(&remote_name, config, "remote.pushdefault");
+	if (push) {
+		error = retrieve_upstream_configuration(
+			&remote_name, config, refname, "branch.%s.pushremote");
+		if (error == GIT_ENOTFOUND)
+			error = git_config__get_string_buf(&remote_name, config, "remote.pushdefault");
+		source = refname;
+	} else {
+		if ((error = retrieve_upstream_configuration(
+				&remote_name, config, refname, "branch.%s.remote")) == 0)
+			error = retrieve_upstream_configuration(
+				&merge_name, config, refname, "branch.%s.merge");
+		source = merge_name.ptr;
+	}
 	if (error < 0)
 		goto cleanup;
-	if (!remote_name.size) {
+	if (!remote_name.size || (!push && !merge_name.size)) {
 		error = GIT_ENOTFOUND;
 		goto cleanup;
 	}
@@ -523,14 +537,14 @@ int git_branch_push_remote(
 	if (strcmp(remote_name.ptr, ".") != 0) {
 		if ((error = git_remote_lookup(&remote, repo, remote_name.ptr)) < 0)
 			goto cleanup;
-		refspec = git_remote__matching_refspec(remote, refname);
+		refspec = git_remote__matching_refspec(remote, source);
 		if (!refspec) {
 			error = GIT_ENOTFOUND;
 			goto cleanup;
 		}
-		error = git_refspec__transform(&name, refspec, refname);
+		error = git_refspec__transform(&name, refspec, source);
 	} else {
-		error = git_str_sets(&name, refname);
+		error = git_str_sets(&name, source);
 	}
 	if (error < 0 || (error = git_buf_fromstr(name_out, &name)) < 0)
 		goto cleanup;
@@ -541,8 +555,23 @@ cleanup:
 	git_config_free(config);
 	git_remote_free(remote);
 	git_str_dispose(&remote_name);
+	git_str_dispose(&merge_name);
 	git_str_dispose(&name);
 	return error;
+}
+
+int git_branch_remote(
+	git_remote **remote_out, git_buf *name_out,
+	git_repository *repo, const char *refname)
+{
+	return branch_remote(remote_out, name_out, repo, refname, false);
+}
+
+int git_branch_push_remote(
+	git_remote **remote_out, git_buf *name_out,
+	git_repository *repo, const char *refname)
+{
+	return branch_remote(remote_out, name_out, repo, refname, true);
 }
 
 static int git_branch_upstream_with_format(
