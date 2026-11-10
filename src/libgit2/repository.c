@@ -150,6 +150,7 @@ int git_repository__cleanup(git_repository *repo)
 	GIT_ASSERT_ARG(repo);
 
 	git_repository_submodule_cache_clear(repo);
+	git_submodule__wd_repos_free(repo);
 	git_cache_clear(&repo->objects);
 	git_attr_cache_flush(repo);
 	git_grafts_free(repo->grafts);
@@ -191,6 +192,7 @@ void git_repository_free(git_repository *repo)
 	git__free(repo->ident_name);
 	git__free(repo->ident_email);
 
+	git_mutex_free(&repo->submodule_wd_repos_lock);
 	git__memzero(repo, sizeof(*repo));
 	git__free(repo);
 }
@@ -308,7 +310,8 @@ static git_repository *repository_alloc(void)
 	git_repository *repo = git__calloc(1, sizeof(git_repository));
 
 	if (repo == NULL ||
-		git_cache_init(&repo->objects) < 0)
+		git_cache_init(&repo->objects) < 0 ||
+		git_mutex_init(&repo->submodule_wd_repos_lock) < 0)
 		goto on_error;
 
 	git_array_init_to_size(repo->reserved_names, 4);

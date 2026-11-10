@@ -119,6 +119,12 @@ enum {
 
 GIT_HASHMAP_STR_STRUCT(git_submodule_cache, git_submodule *);
 
+typedef struct git_submodule_wd_repo git_submodule_wd_repo;
+GIT_HASHMAP_STR_STRUCT(git_submodule_wd_repos, git_submodule_wd_repo *);
+
+/* Close the submodule repositories kept open by git_submodule__status */
+extern void git_submodule__wd_repos_free(git_repository *repo);
+
 /* Initialize an external submodule cache for the provided repo. */
 extern int git_submodule_cache_init(git_submodule_cache **out, git_repository *repo);
 

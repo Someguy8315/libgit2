@@ -1691,6 +1691,143 @@ int git_submodule_open(git_repository **subrepo, git_submodule *sm)
 	return git_submodule__open(subrepo, sm, false);
 }
 
+struct git_submodule_wd_repo {
+	git_repository *repo;
+	git_futils_filestamp stamp;
+	size_t refs; /* one for the map, one per caller using repo */
+};
+
+GIT_HASHMAP_STR_FUNCTIONS(git_submodule_wd_repos, GIT_HASHMAP_INLINE, git_submodule_wd_repo *);
+
+static void submodule_wd_repo_release(git_repository *parent, git_submodule_wd_repo *entry)
+{
+	size_t refs;
+
+	git_mutex_lock(&parent->submodule_wd_repos_lock);
+	refs = --entry->refs;
+	git_mutex_unlock(&parent->submodule_wd_repos_lock);
+
+	if (!refs) {
+		git_repository_free(entry->repo);
+		git__free(entry);
+	}
+}
+
+void git_submodule__wd_repos_free(git_repository *repo)
+{
+	git_hashmap_iter_t iter = GIT_HASHMAP_ITER_INIT;
+	const char *key;
+	git_submodule_wd_repo *entry;
+
+	while (git_submodule_wd_repos_iterate(&iter, &key, &entry, &repo->submodule_wd_repos) == 0) {
+		git__free((char *)key);
+		submodule_wd_repo_release(repo, entry);
+	}
+	git_submodule_wd_repos_dispose(&repo->submodule_wd_repos);
+	memset(&repo->submodule_wd_repos, 0, sizeof(repo->submodule_wd_repos));
+}
+
+/*
+ * Like git_submodule_open_bare but only loads the working directory data. The repository stays
+ * open on the parent until the submodule's .git changes: reopening it rereads every config file,
+ * which made it most of the cost of a submodule status that ignores dirty contents.
+ */
+static int submodule_load_wd_head(git_submodule *sm)
+{
+	git_repository *parent = sm->repo;
+	const char *wd = git_repository_workdir(parent);
+	git_str path = GIT_STR_INIT;
+	git_futils_filestamp stamp = {{0}};
+	git_submodule_wd_repo *entry = NULL, *old = NULL;
+	char *key = NULL;
+	int error;
+
+	if (git_repository__ensure_not_bare(parent, "open submodule repository") < 0)
+		return GIT_EBAREREPO;
+
+	if (git_str_join3(&path, '/', wd, sm->path, DOT_GIT) < 0)
+		return -1;
+
+	sm->flags = sm->flags &
+		~(GIT_SUBMODULE_STATUS_IN_WD |
+		  GIT_SUBMODULE_STATUS__WD_OID_VALID |
+		  GIT_SUBMODULE_STATUS__WD_SCANNED);
+
+	git_mutex_lock(&parent->submodule_wd_repos_lock);
+	if (git_submodule_wd_repos_get(&entry, &parent->submodule_wd_repos, sm->path) == 0) {
+		stamp = entry->stamp;
+		++entry->refs;
+	} else {
+		entry = NULL;
+	}
+	git_mutex_unlock(&parent->submodule_wd_repos_lock);
+
+	/* The stamp is taken before opening, so a change in between only causes another reopen. */
+	if ((error = git_futils_filestamp_check(&stamp, path.ptr)) < 0) {
+		git_error_clear();
+		git_str_rtruncate_at_char(&path, '/'); /* remove "/.git" */
+		if (git_fs_path_isdir(path.ptr))
+			sm->flags |= GIT_SUBMODULE_STATUS__WD_SCANNED;
+		goto done;
+	}
+
+	if (error || !entry) {
+		if (entry)
+			submodule_wd_repo_release(parent, entry);
+		if ((entry = git__calloc(1, sizeof(*entry))) == NULL) {
+			error = -1;
+			goto done;
+		}
+		entry->stamp = stamp;
+		entry->refs = 2;
+
+		if ((error = git_repository_open_ext(&entry->repo, path.ptr,
+				GIT_REPOSITORY_OPEN_NO_SEARCH | GIT_REPOSITORY_OPEN_NO_DOTGIT |
+				GIT_REPOSITORY_OPEN_BARE, wd)) < 0) {
+			git__free(entry);
+			entry = NULL;
+			sm->flags |= GIT_SUBMODULE_STATUS__WD_SCANNED | GIT_SUBMODULE_STATUS_IN_WD;
+			goto done;
+		}
+
+		if ((key = git__strdup(sm->path)) == NULL) {
+			error = -1;
+			--entry->refs;
+			goto done;
+		}
+
+		git_mutex_lock(&parent->submodule_wd_repos_lock);
+		if (git_submodule_wd_repos_get(&old, &parent->submodule_wd_repos, key) != 0)
+			old = NULL;
+		/* An existing key is kept, so ours is only stored for a new path. */
+		error = git_submodule_wd_repos_put(&parent->submodule_wd_repos, key, entry);
+		if (!error && !old)
+			key = NULL;
+		git_mutex_unlock(&parent->submodule_wd_repos_lock);
+
+		git__free(key);
+		if (error) {
+			--entry->refs;
+			goto done;
+		}
+		if (old)
+			submodule_wd_repo_release(parent, old);
+	}
+
+	sm->flags |= GIT_SUBMODULE_STATUS_IN_WD | GIT_SUBMODULE_STATUS__WD_SCANNED;
+
+	if (!git_reference_name_to_id(&sm->wd_oid, entry->repo, GIT_HEAD_FILE))
+		sm->flags |= GIT_SUBMODULE_STATUS__WD_OID_VALID;
+	else
+		git_error_clear();
+
+done:
+	if (entry)
+		submodule_wd_repo_release(parent, entry);
+	git_str_dispose(&path);
+	return error;
+}
+
 static void submodule_update_from_index_entry(
 	git_submodule *sm, const git_index_entry *ie)
 {
@@ -1875,12 +2012,8 @@ int git_submodule__status(
 
 	/* for ignore == dirty, don't scan the working directory */
 	if (ign == GIT_SUBMODULE_IGNORE_DIRTY) {
-		/* git_submodule_open_bare will load WD OID data */
-		if (git_submodule_open_bare(&smrepo, sm) < 0)
+		if (submodule_load_wd_head(sm) < 0)
 			git_error_clear();
-		else
-			git_repository_free(smrepo);
-		smrepo = NULL;
 	} else if (git_submodule_open(&smrepo, sm) < 0) {
 		git_error_clear();
 		smrepo = NULL;
