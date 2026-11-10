@@ -108,6 +108,14 @@ GIT_EXTERN(int) git_repository_new(git_repository **out);
 GIT_EXTERN(int) git_repository__cleanup(git_repository *repo);
 
 /**
+ * gitstatusd: release object databases, including cached submodule databases,
+ * so idle repositories do not hold packfiles or their indexes open on Windows.
+ * They are reopened lazily. All repository users must be idle and must have
+ * released their ODB references before calling this function.
+ */
+GIT_EXTERN(void) git_repository__release_odb(git_repository *repo);
+
+/**
  * Update the filesystem config settings for an open repository
  *
  * When a repository is initialized, config values are set based on the

@@ -25,6 +25,7 @@
 
 #include "git2/config.h"
 #include "git2/sys/config.h"
+#include "git2/sys/repository.h"
 #include "git2/types.h"
 #include "git2/index.h"
 
@@ -1711,6 +1712,17 @@ static void submodule_wd_repo_release(git_repository *parent, git_submodule_wd_r
 		git_repository_free(entry->repo);
 		git__free(entry);
 	}
+}
+
+void git_submodule__wd_repos_release_odb(git_repository *repo)
+{
+	git_hashmap_iter_t iter = GIT_HASHMAP_ITER_INIT;
+	const char *key;
+	git_submodule_wd_repo *entry;
+
+	while (git_submodule_wd_repos_iterate(
+	               &iter, &key, &entry, &repo->submodule_wd_repos) == 0)
+		git_repository__release_odb(entry->repo);
 }
 
 void git_submodule__wd_repos_free(git_repository *repo)

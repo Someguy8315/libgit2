@@ -147,6 +147,14 @@ static void set_index(git_repository *repo, git_index *index)
 
 git_atomic32 git_repository__refresh_epoch;
 
+void git_repository__release_odb(git_repository *repo)
+{
+	GIT_ASSERT_ARG_WITH_RETVAL(repo, /* void */);
+
+	git_submodule__wd_repos_release_odb(repo);
+	set_odb(repo, NULL);
+}
+
 int git_repository__cleanup(git_repository *repo)
 {
 	GIT_ASSERT_ARG(repo);
