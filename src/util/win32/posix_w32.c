@@ -771,7 +771,6 @@ int p_rmdir(const char *path)
 char *p_realpath(const char *orig_path, char *buffer)
 {
 	git_win32_path orig_path_w, buffer_w;
-	DWORD long_len;
 
 	if (git_win32_path_from_utf8(orig_path_w, orig_path) < 0)
 		return NULL;
@@ -794,10 +793,10 @@ char *p_realpath(const char *orig_path, char *buffer)
 	}
 
 	/*
-	 * Then, the path is canonicalized. eg, on macOS,
-	 * "/TMP" -> "/private/tmp". For this, we need GetLongPathName.
+	 * gitstatusd: only check that the path exists. Canonicalizing it with
+	 * GetLongPathName lists every parent directory, on every status query.
 	 */
-	if ((long_len = GetLongPathNameW(buffer_w, buffer_w, GIT_WIN_PATH_UTF16)) == 0) {
+	if (GetFileAttributesW(buffer_w) == INVALID_FILE_ATTRIBUTES) {
 		DWORD error = GetLastError();
 
 		if (error == ERROR_FILE_NOT_FOUND ||
@@ -808,11 +807,6 @@ char *p_realpath(const char *orig_path, char *buffer)
 		else
 			errno = EINVAL;
 
-		return NULL;
-	}
-
-	if (long_len > GIT_WIN_PATH_UTF16) {
-		errno = ENAMETOOLONG;
 		return NULL;
 	}
 
