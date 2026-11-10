@@ -722,8 +722,6 @@ typedef struct {
 	git_iterator *new_iter;
 	const git_index_entry *oitem;
 	const git_index_entry *nitem;
-	git_submodule_cache *submodule_cache;
-	bool submodule_cache_initialized;
 } diff_in_progress;
 
 #define MODE_BITS_MASK 0000777
@@ -738,7 +736,6 @@ static int maybe_modified_submodule(
 	git_submodule *sub;
 	unsigned int sm_status = 0;
 	git_submodule_ignore_t ign = diff->base.opts.ignore_submodules;
-	git_submodule_cache *submodule_cache = NULL;
 
 	*status = GIT_DELTA_UNMODIFIED;
 
@@ -746,23 +743,13 @@ static int maybe_modified_submodule(
 		ign == GIT_SUBMODULE_IGNORE_ALL)
 		return 0;
 
-	if (diff->base.repo->submodule_cache != NULL) {
-		submodule_cache = diff->base.repo->submodule_cache;
-	} else {
-		if (!info->submodule_cache_initialized) {
-			info->submodule_cache_initialized = true;
-			/*
-			 * Try to cache the submodule information to avoid having to parse it for
-			 * every submodule. It is okay if it fails, the cache will still be NULL
-			 * and the submodules will be attempted to be looked up individually.
-			 */
-			git_submodule_cache_init(&info->submodule_cache, diff->base.repo);
-		}
-		submodule_cache = info->submodule_cache;
-	}
-
-	if ((error = git_submodule__lookup_with_cache(
-			&sub, diff->base.repo, info->nitem->path, submodule_cache)) < 0) {
+	/*
+	 * Look up only this submodule. Mapping all of them on the first one, as
+	 * upstream does, reads the whole index and HEAD tree in every diff, and
+	 * gitstatusd runs several small diffs per status.
+	 */
+	if ((error = git_submodule_lookup(
+			&sub, diff->base.repo, info->nitem->path)) < 0) {
 
 		/* GIT_EEXISTS means dir with .git in it was found - ignore it */
 		if (error == GIT_EEXISTS) {
@@ -1315,8 +1302,6 @@ cleanup:
 		*out = &diff->base;
 	else
 		git_diff_free(&diff->base);
-	if (info.submodule_cache)
-		git_submodule_cache_free(info.submodule_cache);
 
 	return error;
 }
