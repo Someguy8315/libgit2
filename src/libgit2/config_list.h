@@ -30,3 +30,6 @@ int git_config_list_iterator_new(git_config_iterator **out, git_config_list *lis
 const char *git_config_list_add_string(git_config_list *list, const char *str);
 
 void git_config_list_entry_free(git_config_backend_entry *entry);
+
+/* Create a read-only snapshot backend that takes over a reference to an unmodifiable list */
+int git_config_backend_snapshot_list(git_config_backend **out, git_config_list *list);

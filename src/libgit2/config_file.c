@@ -270,25 +270,33 @@ static int config_file_iterator(
 	struct git_config_backend *backend)
 {
 	config_file_backend *b = GIT_CONTAINER_OF(backend, config_file_backend, parent);
-	git_config_list *dupped = NULL, *config_list = NULL;
+	git_config_list *config_list = NULL;
 	int error;
 
+	/* A refresh replaces the list rather than modifying it, so iterators can share it. */
 	if ((error = config_file_refresh(backend)) < 0 ||
-	    (error = config_file_take_list(&config_list, b)) < 0 ||
-	    (error = git_config_list_dup(&dupped, config_list)) < 0 ||
-	    (error = git_config_list_iterator_new(iter, dupped)) < 0)
-		goto out;
+	    (error = config_file_take_list(&config_list, b)) < 0)
+		return error;
 
-out:
-	/* Let iterator delete duplicated config_list when it's done */
+	error = git_config_list_iterator_new(iter, config_list);
 	git_config_list_free(config_list);
-	git_config_list_free(dupped);
 	return error;
 }
 
 static int config_file_snapshot(git_config_backend **out, git_config_backend *backend)
 {
-	return git_config_backend_snapshot(out, backend);
+	config_file_backend *b = GIT_CONTAINER_OF(backend, config_file_backend, parent);
+	git_config_list *config_list = NULL;
+	int error;
+
+	/* Share the current list instead of copying it twice through an iterator. */
+	if ((error = config_file_refresh(backend)) < 0 ||
+	    (error = config_file_take_list(&config_list, b)) < 0)
+		return error;
+
+	if ((error = git_config_backend_snapshot_list(out, config_list)) < 0)
+		git_config_list_free(config_list);
+	return error;
 }
 
 static int config_file_set(git_config_backend *cfg, const char *name, const char *value)

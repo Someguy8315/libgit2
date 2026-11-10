@@ -28,17 +28,9 @@ static int config_snapshot_iterator(
 	struct git_config_backend *backend)
 {
 	config_snapshot_backend *b = GIT_CONTAINER_OF(backend, config_snapshot_backend, parent);
-	git_config_list *config_list = NULL;
-	int error;
 
-	if ((error = git_config_list_dup(&config_list, b->config_list)) < 0 ||
-	    (error = git_config_list_iterator_new(iter, config_list)) < 0)
-		goto out;
-
-out:
-	/* Let iterator delete duplicated config_list when it's done */
-	git_config_list_free(config_list);
-	return error;
+	/* The list is never modified, so iterators can share it. */
+	return git_config_list_iterator_new(iter, b->config_list);
 }
 
 static int config_snapshot_get(
@@ -145,6 +137,10 @@ static int config_snapshot_open(git_config_backend *cfg, git_config_level_t leve
 	GIT_UNUSED(level);
 	GIT_UNUSED(repo);
 
+	/* Created from a shared list by git_config_backend_snapshot_list */
+	if (b->config_list)
+		return 0;
+
 	if ((error = git_config_list_new(&config_list)) < 0 ||
 	    (error = b->source->iterator(&it, b->source)) < 0)
 		goto out;
@@ -196,5 +192,18 @@ int git_config_backend_snapshot(git_config_backend **out, git_config_backend *so
 
 	*out = &backend->parent;
 
+	return 0;
+}
+
+int git_config_backend_snapshot_list(git_config_backend **out, git_config_list *list)
+{
+	config_snapshot_backend *backend;
+	int error;
+
+	if ((error = git_config_backend_snapshot(out, NULL)) < 0)
+		return error;
+
+	backend = GIT_CONTAINER_OF(*out, config_snapshot_backend, parent);
+	backend->config_list = list;
 	return 0;
 }
