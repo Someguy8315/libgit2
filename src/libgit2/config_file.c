@@ -47,6 +47,9 @@ typedef struct {
 	git_str locked_content;
 
 	config_file file;
+
+	/* gitstatusd: the refresh epoch in which the files were last checked */
+	git_atomic32 refreshed_epoch;
 } config_file_backend;
 
 typedef struct {
@@ -223,20 +226,27 @@ out:
 	return error;
 }
 
+git_atomic32 git_config_file__refresh_epoch;
+
 static int config_file_refresh(git_config_backend *cfg)
 {
 	config_file_backend *b = GIT_CONTAINER_OF(cfg, config_file_backend, parent);
 	git_config_list *config_list = NULL;
-	int error, modified;
+	int error, modified, epoch = git_atomic32_get(&git_config_file__refresh_epoch);
 
 	if (cfg->readonly)
+		return 0;
+
+	if (epoch && git_atomic32_get(&b->refreshed_epoch) == epoch)
 		return 0;
 
 	if ((error = config_file_is_modified(&modified, &b->file)) < 0 && error != GIT_ENOTFOUND)
 		goto out;
 
-	if (!modified)
+	if (!modified) {
+		git_atomic32_set(&b->refreshed_epoch, epoch);
 		return 0;
+	}
 
 	config_file_clear_includes(b);
 
@@ -246,6 +256,7 @@ static int config_file_refresh(git_config_backend *cfg)
 		goto out;
 
 	config_list = NULL;
+	git_atomic32_set(&b->refreshed_epoch, epoch);
 out:
 	git_config_list_free(config_list);
 
