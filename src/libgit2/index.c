@@ -493,6 +493,7 @@ static void index_free(git_index *index)
 	git_vector_dispose(&index->deleted);
 
 	git__free(index->index_file_path);
+	git_str_dispose(&index->unhashed);
 
 	git__memzero(index, sizeof(*index));
 	git__free(index);
@@ -635,8 +636,13 @@ const git_oid *git_index_checksum(git_index *index)
 }
 #endif
 
-/**
- * Returns 1 for changed, 0 for not changed and <0 for errors
+#define INDEX_CHECKSUM_OMITTED 2
+
+static const unsigned char index_zero_checksum[GIT_HASH_MAX_SIZE];
+
+/*
+ * Returns 1 for changed, 0 for not changed, INDEX_CHECKSUM_OMITTED if both
+ * checksums are zero (index.skipHash) and so cannot tell, and <0 for errors
  */
 static int compare_checksum(git_index *index)
 {
@@ -660,7 +666,10 @@ static int compare_checksum(git_index *index)
 	if (bytes_read < (ssize_t)checksum_size)
 		return -1;
 
-	return !!memcmp(checksum, index->checksum, checksum_size);
+	if (memcmp(checksum, index->checksum, checksum_size))
+		return 1;
+
+	return memcmp(checksum, index_zero_checksum, checksum_size) ? 0 : INDEX_CHECKSUM_OMITTED;
 }
 
 int git_index_read(git_index *index, int force)
@@ -704,12 +713,25 @@ int git_index_read_ex(git_index *index, int force, int *read)
 		return -1;
 	}
 
-	/* index.skipHash writes a zero footer, so also compare the file stamp. */
-	if (!updated && !checksum_updated && !force)
-		return 0;
+	if (!updated && !force) {
+		if (!checksum_updated)
+			return 0;
 
-	error = git_futils_readbuffer(&buffer, index->index_file_path);
-	if (error < 0)
+		/* Without a checksum, only the content shows whether the index changed. Rewrites
+		 * such as rebases can keep its size and timestamp. */
+		if (checksum_updated == INDEX_CHECKSUM_OMITTED) {
+			if ((error = git_futils_readbuffer(&buffer, index->index_file_path)) < 0)
+				return error;
+			if (buffer.size == index->unhashed.size &&
+			    !memcmp(buffer.ptr, index->unhashed.ptr, buffer.size)) {
+				git_str_dispose(&buffer);
+				return 0;
+			}
+		}
+	}
+
+	if (!buffer.asize &&
+	    (error = git_futils_readbuffer(&buffer, index->index_file_path)) < 0)
 		return error;
 
 	if (read)
@@ -726,6 +748,10 @@ int git_index_read_ex(git_index *index, int force, int *read)
 	if (!error) {
 		git_futils_filestamp_set(&index->stamp, &stamp);
 		index->dirty = 0;
+		if (!memcmp(index->checksum, index_zero_checksum, git_oid_size(index->oid_type)))
+			git_str_swap(&index->unhashed, &buffer);
+		else
+			git_str_dispose(&index->unhashed);
 	}
 
 	git_str_dispose(&buffer);
